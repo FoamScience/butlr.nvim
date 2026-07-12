@@ -1,0 +1,3 @@
+*.luac
+.luarc.json
+doc/tags
