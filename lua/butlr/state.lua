@@ -16,6 +16,7 @@ local M = {}
 ---@field status string
 ---@field hunks butlr.HunkInfo[]
 ---@field branch_name? string
+---@field commit_id? string
 ---@field stack_name? string
 
 ---@class butlr.Branch
@@ -50,7 +51,7 @@ local refresh_timer = nil
 
 local function parse_status(status)
   local state = {
-    unassigned = status.unassignedChanges or {},
+    unassigned = status.uncommittedChanges or {},
     branches = {},
     staging_areas = {},
     merge_base = status.mergeBase,
@@ -117,11 +118,13 @@ local function parse_changed_lines(diff_text, new_start)
   return added, removed_at
 end
 
-local function parse_diff(diff_data, fallback_id)
+-- Committed diffs carry no per-file `id`; their CLI IDs come from
+-- `but status -f` (commits[].changes[].cliId), keyed by path.
+local function parse_diff(diff_data, fallback_id, id_by_path)
   local hunks = {}
   for _, change in ipairs(diff_data.changes or {}) do
     if change.diff and change.diff.hunks then
-      local hunk_id = change.id or fallback_id
+      local hunk_id = change.id or (id_by_path and id_by_path[change.path]) or fallback_id
       local file_hunks = {}
       for _, h in ipairs(change.diff.hunks) do
         local added, removed_at = parse_changed_lines(h.diff or "", h.newStart)
@@ -150,11 +153,13 @@ local function parse_diff(diff_data, fallback_id)
   return hunks
 end
 
-local function merge_hunks(target, source, branch_name)
+local function merge_hunks(target, source, branch_name, commit_id)
   for path, file_change in pairs(source) do
     for _, hunk in ipairs(file_change.hunks) do
       hunk.branch_name = branch_name
+      hunk.commit_id = commit_id
     end
+    file_change.commit_id = commit_id
     if target[path] then
       vim.list_extend(target[path].hunks, file_change.hunks)
     else
@@ -184,7 +189,7 @@ end
 
 function M._do_refresh(callback)
   -- Phase 1: get status
-  cli.run({ "status" }, {
+  cli.run({ "status", "-f" }, {
     on_success = function(status_data)
       local parsed = parse_status(status_data)
 
@@ -195,9 +200,16 @@ function M._do_refresh(callback)
       for _, branch in ipairs(parsed.branches) do
         for _, commit in ipairs(branch.commits) do
           local cli_id = commit.cliId or commit.commitId:sub(1, 7)
+          local id_by_path = {}
+          for _, change in ipairs(commit.changes or {}) do
+            if change.filePath and change.cliId then
+              id_by_path[change.filePath] = change.cliId
+            end
+          end
           table.insert(commit_sources, {
             cli_id = cli_id,
             branch_name = branch.name,
+            id_by_path = id_by_path,
           })
         end
       end
@@ -257,8 +269,8 @@ function M._do_refresh(callback)
       for _, cs in ipairs(commit_sources) do
         cli.run({ "diff", cs.cli_id }, {
           on_success = function(data)
-            local hunks = parse_diff(data, cs.cli_id)
-            merge_hunks(all_hunks, hunks, cs.branch_name)
+            local hunks = parse_diff(data, cs.cli_id, cs.id_by_path)
+            merge_hunks(all_hunks, hunks, cs.branch_name, cs.cli_id)
             try_finish()
           end,
           on_error = function()

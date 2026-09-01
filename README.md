@@ -1,7 +1,7 @@
 # butlr.nvim
 
 [GitButler](https://gitbutler.com/) integration for Neovim. See which virtual
-branch each hunk belongs to, right in the buffer — and reassign, mark, or
+branch each hunk belongs to, right in the buffer — and reassign, commit, or
 unapply branches without leaving your editor.
 
 butlr activates automatically in any repository managed by GitButler and stays
@@ -11,9 +11,10 @@ out of the way everywhere else.
 
 - **Inline hunk attribution** — signs + end-of-line virtual text show the
   branch each changed hunk is assigned to (or that it's still unassigned).
-- **`rub` picker** — move the hunk/file under the cursor to another branch,
-  the unassigned pool, or amend it into a commit.
-- **Branch picker** — mark (auto-stage), unmark, and unapply branches.
+- **Assign picker** — route the hunk/file under the cursor onto another branch,
+  amend it into a commit, or uncommit it back into the working tree.
+- **Branch picker** — absorb, commit uncommitted changes onto a branch, discard,
+  and unapply.
 - **Hunk navigation** — jump between hunks in the current file or across the
   whole worktree.
 - **Statusline component** — active branches, unassigned count, conflict flag.
@@ -23,7 +24,8 @@ out of the way everywhere else.
 ## Requirements
 
 - Neovim ≥ 0.10 (uses `vim.system` and `vim.uv`)
-- [GitButler](https://gitbutler.com/) with the `but` CLI on your `$PATH`
+- [GitButler](https://gitbutler.com/) with the `but` CLI on your `$PATH`,
+  **version 0.22.x** (see [Supported `but` versions](#supported-but-versions))
 - [folke/snacks.nvim](https://github.com/folke/snacks.nvim) — for the pickers
 
 ## Installation
@@ -65,6 +67,11 @@ require("butlr").setup({
   picker = {
     backend = "snacks",
   },
+  cli = {
+    check_version = true,              -- refuse to enable on an unsupported `but`
+    min_version = "0.22.0",
+    max_tested_version = "0.22",       -- newer minors only warn
+  },
   notify_conflicts = true,             -- notify when conflicted commits appear
 })
 ```
@@ -85,7 +92,7 @@ Defined with `default = true`, so a colorscheme can override them:
 butlr exposes a Lua API; bind what you use. Example keymaps:
 
 ```lua
-vim.keymap.set("n", "<leader>br", function() require("butlr.picker").rub() end,      { desc = "butlr: reassign hunk/file" })
+vim.keymap.set("n", "<leader>br", function() require("butlr.picker").assign() end,   { desc = "butlr: reassign hunk/file" })
 vim.keymap.set("n", "<leader>bb", function() require("butlr.picker").branches() end, { desc = "butlr: branches" })
 vim.keymap.set("n", "]h",         function() require("butlr.navigation").next_hunk() end, { desc = "butlr: next hunk" })
 vim.keymap.set("n", "[h",         function() require("butlr.navigation").prev_hunk() end, { desc = "butlr: prev hunk" })
@@ -104,15 +111,37 @@ structured tables if you want to build your own component.
 
 ### Actions (Lua)
 
-`require("butlr.actions")` wraps the `but` CLI directly: `rub`, `stage`,
-`discard`, `mark`, `unmark`, `absorb`, `undo`, `branch_new`, `apply`,
-`unapply`. Each takes an optional trailing `callback`.
+`require("butlr.actions")` wraps the `but` CLI directly: `amend`, `commit`,
+`squash`, `move`, `move_to_branch`, `uncommit`, `discard`, `absorb`, `undo`,
+`branch_new`, `apply`, `unapply`. Each takes an optional trailing `callback`.
+
+## Supported `but` versions
+
+butlr targets the `but` **0.22.x** command surface and refuses to enable outside
+it, because an unsupported CLI fails silently rather than loudly — every JSON
+read errors out and the buffer simply shows no hunks.
+
+The pinned range lives in `opts.cli`; raise `max_tested_version` yourself if you
+want to try a newer `but`, or set `check_version = false` to skip the guard.
+
+Notable upstream changes butlr tracks:
+
+| Older `but` | 0.22.x |
+|---|---|
+| global `-j` / `--status-after` | per-subcommand `--json` / `--status-after` |
+| `status.unassignedChanges` | `status.uncommittedChanges` |
+| `but rub <src> <tgt>` | `but squash -t`, `but move`, `but amend` |
+| `but stage <hunk> <branch>` | `but amend -t <branch>` / `but commit -b <branch>` |
+| `but mark` / `but unmark` | removed upstream, no replacement |
+| `but branch new -a <anchor>` | `but branch new -A/-B <anchor>` |
 
 ## How it works
 
-butlr shells out to `but -j` (JSON output), parses status and per-branch diffs,
-and renders the result as extmark signs and virtual text. State refreshes on
-`BufWritePost`, `FocusGained`, and after any mutating action.
+butlr shells out to `but <cmd> --json`, parses `but status -f` plus per-branch
+and per-commit diffs, and renders the result as extmark signs and virtual text.
+Committed file IDs come from `status -f` (`commits[].changes[].cliId`) since
+`but diff <commit>` does not emit them. State refreshes on `BufWritePost`,
+`FocusGained`, and after any mutating action.
 
 ## License
 
