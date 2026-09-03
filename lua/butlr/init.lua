@@ -10,10 +10,26 @@ function M.setup(opts)
   config.setup(opts)
 end
 
+local version_warned = false
+
 function M.enable()
   if enabled then
     return
   end
+
+  local ok, msg = require("butlr.cli").check_version()
+  if not ok then
+    if not version_warned then
+      version_warned = true
+      vim.notify("[butlr] " .. msg, vim.log.levels.ERROR)
+    end
+    return
+  end
+  if msg and not version_warned then
+    version_warned = true
+    vim.notify("[butlr] " .. msg, vim.log.levels.WARN)
+  end
+
   enabled = true
 
   local state = require("butlr.state")
